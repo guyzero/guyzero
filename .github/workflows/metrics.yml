@@ -25,6 +25,7 @@ jobs:
           # Options
           template: classic
           base: header, activity, community, repositories, metadata
+          base_indepth: yes
           config_timezone: America/Los_Angeles
           plugin_followup: yes
           plugin_followup_sections: repositories
