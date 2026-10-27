@@ -1,16 +1,53 @@
 # Visit https://github.com/lowlighter/metrics/blob/master/action.yml for full reference
 name: Metrics
 on:
-  # Schedule updates (runs at 1am daily)
+  # Schedule updates (runs at 1am UTC daily; the 3D-contrib workflow runs an hour later
+  # so the two never race each other pushing to main)
   schedule: [{cron: "0 1 * * *"}]
   # Lines below let you run workflow manually and on each commit
   workflow_dispatch:
   push: {branches: ["master", "main"]}
+
+# Least privilege: the job only needs to commit the rendered SVG back to this repo.
+permissions:
+  contents: write
+
 jobs:
   github-metrics:
     runs-on: ubuntu-latest
     steps:
-      - uses: lowlighter/metrics@latest
+      # Fail fast with a clear message if METRICS_TOKEN is missing, expired or revoked.
+      # Without this check the metrics action retries 3x and burns ~15 minutes before
+      # surfacing a one-line "Bad credentials" error.
+      #
+      # To (re)create the token:
+      #   1. GitHub -> Settings -> Developer settings -> Personal access tokens -> Tokens (classic)
+      #   2. Generate new token (classic). Scopes: read:user, read:org. Add "repo" only if you
+      #      want private repositories counted. Pick an expiration and note the date.
+      #   3. Repo -> Settings -> Secrets and variables -> Actions -> update METRICS_TOKEN
+      #   4. Re-run this workflow from the Actions tab (workflow_dispatch).
+      - name: Check METRICS_TOKEN is present and valid
+        env:
+          METRICS_TOKEN: ${{ secrets.METRICS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${METRICS_TOKEN}" ]; then
+            echo "::error title=METRICS_TOKEN missing::The METRICS_TOKEN repository secret is not set. See the comments in .github/workflows/metrics.yml for how to create it."
+            exit 1
+          fi
+          status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${METRICS_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/user)
+          if [ "${status}" != "200" ]; then
+            echo "::error title=METRICS_TOKEN rejected::GitHub returned HTTP ${status} for the METRICS_TOKEN secret. The token has most likely expired or been revoked. Generate a new classic PAT (scopes: read:user, read:org) and update the METRICS_TOKEN secret. See the comments in .github/workflows/metrics.yml."
+            exit 1
+          fi
+          echo "METRICS_TOKEN is valid."
+
+      # Pinned to a release tag rather than the moving "latest" tag so a future upstream
+      # change can't silently alter what runs here. Bump deliberately.
+      - uses: lowlighter/metrics@v3.34
         with:
           # Your GitHub token
           # The following scopes are required:
@@ -21,6 +58,8 @@ jobs:
           #  - read:packages (for some packages related data)
           #  - repo          (optional, if you want to include private repositories)
           token: ${{ secrets.METRICS_TOKEN }}
+          # The built-in GITHUB_TOKEN commits the SVG; it only needs contents: write (set above).
+          committer_token: ${{ secrets.GITHUB_TOKEN }}
 
           # Options
           template: classic
